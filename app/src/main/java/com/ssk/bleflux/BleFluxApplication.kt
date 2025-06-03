@@ -2,14 +2,12 @@ package com.ssk.bleflux
 
 import android.app.Application
 import com.ssk.bleflux.domain.BleFlux
+import dagger.hilt.android.HiltAndroidApp
 
-// @HiltAndroidApp
+@HiltAndroidApp
 class BleFluxApplication : Application() {
-    
     override fun onCreate() {
         super.onCreate()
-        
-        // Initialize BleFlux Library with application context
         BleFlux.initialize(this)
     }
 }
