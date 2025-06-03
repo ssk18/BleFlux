@@ -11,9 +11,11 @@ import com.ssk.bleflux.domain.connection.BleGattProvider
 import com.ssk.bleflux.domain.exceptions.ConnectionFailedException
 import com.ssk.bleflux.domain.exceptions.ConnectionTimeoutException
 import com.ssk.bleflux.domain.exceptions.DeviceNotConnectedException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
 import kotlin.coroutines.Continuation
@@ -36,17 +38,21 @@ class BleConnectionImpl(
         override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
-                    _connectionState.value = BleConnectionState.Connected(connectedDevice?.address ?: "")
+                    _connectionState.update { 
+                        BleConnectionState.Connected(connectedDevice?.address ?: "") 
+                    }
                     pendingContinuation?.resume(Unit)
                     pendingContinuation = null
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
-                    _connectionState.value = BleConnectionState.Disconnected
                     if (status != BluetoothGatt.GATT_SUCCESS) {
                         val exception = ConnectionFailedException(connectedDevice?.address ?: "", status)
-                        _connectionState.value = BleConnectionState.Failed(exception, canRetry = true)
+                        _connectionState.update { 
+                            BleConnectionState.Failed(exception, canRetry = true) 
+                        }
                         pendingContinuation?.resumeWithException(exception)
                     } else {
+                        _connectionState.update { BleConnectionState.Disconnected }
                         // Successful disconnection
                         pendingContinuation?.resume(Unit)
                     }
@@ -54,10 +60,10 @@ class BleConnectionImpl(
                     cleanup()
                 }
                 BluetoothProfile.STATE_CONNECTING -> {
-                    _connectionState.value = BleConnectionState.Connecting
+                    _connectionState.update { BleConnectionState.Connecting }
                 }
                 BluetoothProfile.STATE_DISCONNECTING -> {
-                    _connectionState.value = BleConnectionState.Disconnecting
+                    _connectionState.update { BleConnectionState.Disconnecting }
                 }
             }
         }
@@ -73,44 +79,51 @@ class BleConnectionImpl(
         timeoutMs: Long
     ): Result<Unit> {
         return try {
+            // Ensure we're disconnected first
             if (isConnected()) {
-                disconnect()
+                disconnect().getOrThrow()
             }
             
-            _connectionState.value = BleConnectionState.Connecting
+            _connectionState.update { BleConnectionState.Connecting }
             connectedDevice = device
             
             bluetoothGatt = gattProvider.connectGatt(context, device, autoConnect, gattCallback)
             
             if (bluetoothGatt == null) {
                 val exception = ConnectionFailedException(device.address, -1)
-                _connectionState.value = BleConnectionState.Failed(exception)
-                throw exception
+                _connectionState.update { BleConnectionState.Failed(exception) }
+                return Result.failure(exception)
             }
             
-            // Wait for connection with timeout
-            withTimeout(timeoutMs) {
-                suspendCancellableCoroutine { continuation ->
-                    // Store continuation to use in callback
-                    pendingContinuation = continuation
-                    
-                    continuation.invokeOnCancellation {
-                        pendingContinuation = null
-                        cleanup()
+            // Wait for connection with proper timeout and cancellation handling
+            try {
+                withTimeout(timeoutMs) {
+                    suspendCancellableCoroutine { continuation ->
+                        pendingContinuation = continuation
+                        
+                        continuation.invokeOnCancellation {
+                            pendingContinuation = null
+                            cleanup()
+                        }
                     }
                 }
+                Result.success(Unit)
+            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                val timeoutException = ConnectionTimeoutException(device.address, timeoutMs)
+                _connectionState.update { BleConnectionState.Failed(timeoutException) }
+                cleanup()
+                Result.failure(timeoutException)
+            } catch (e: CancellationException) {
+                // Always cleanup on cancellation and rethrow
+                cleanup()
+                throw e
             }
-            Result.success(Unit)
+        } catch (e: CancellationException) {
+            // Never catch and wrap CancellationException
+            throw e
         } catch (e: Exception) {
             cleanup()
-            when (e) {
-                is kotlinx.coroutines.TimeoutCancellationException -> {
-                    val timeoutException = ConnectionTimeoutException(device.address, timeoutMs)
-                    _connectionState.value = BleConnectionState.Failed(timeoutException)
-                    Result.failure(timeoutException)
-                }
-                else -> Result.failure(e)
-            }
+            Result.failure(e)
         }
     }
     

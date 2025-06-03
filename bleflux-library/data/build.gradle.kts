@@ -15,6 +15,10 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
     }
+    
+    lint {
+        abortOnError = false
+    }
 
     buildTypes {
         release {

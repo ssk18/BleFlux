@@ -6,14 +6,15 @@ import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import com.ssk.bleflux.domain.concurrency.BleCoroutineScope
-import com.ssk.bleflux.domain.exceptions.BleException
-import com.ssk.bleflux.domain.exceptions.BleScanException
 import com.ssk.bleflux.domain.exceptions.ScanStartException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import java.util.concurrent.ConcurrentHashMap
 
 class BleScanner(
@@ -69,80 +70,76 @@ class BleScanner(
         }
     }
     
-    fun startScan(
+    suspend fun startScan(
         scanTimeoutMs: Long = 30000,
         scanFilters: List<ScanFilter>? = null,
         scanSettings: ScanSettings? = null
     ) {
-        bleScope.launch("ble_scan") {
+        bleScope.executeOrThrow("start_scan", scanTimeoutMs + 5000) {
+            // Validate prerequisites first
+            scanExceptionHandler.validateScanPrerequisites()
+            
+            bluetoothLeScanner = bleAdapterProvider.getBluetoothLeScanner()
+            
+            if (bluetoothLeScanner == null) {
+                val adapter = bleAdapterProvider.getBleAdapterOrNull()
+                throw ScanStartException(
+                    errorCode = -1,
+                    message = "BluetoothLeScanner is null. Adapter: $adapter, isEnabled: ${adapter?.isEnabled}"
+                )
+            }
+            
+            if (!permissionChecker.hasBluetoothPermissions()) {
+                val missingPermissions = permissionChecker.getMissingPermissions()
+                throw ScanStartException(
+                    errorCode = -2,
+                    message = "Missing permissions: ${missingPermissions.joinToString()}"
+                )
+            }
+            
+            _scanState.value = BleScanState.Starting
+            discoveredDevices.clear()
+            _scanResults.value = emptyList()
+            
+            val settings = scanSettings ?: ScanSettings.Builder()
+                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
+                .build()
+            
+            bluetoothLeScanner?.let { scanner ->
+                try {
+                    bleAdapterProvider.startScan(scanner, scanFilters, settings, scanCallback)
+                } catch (e: SecurityException) {
+                    throw ScanStartException(
+                        errorCode = -3,
+                        message = "Permission denied: ${e.message}"
+                    )
+                }
+            }
+            _scanState.value = BleScanState.Scanning(System.currentTimeMillis())
+            
             try {
-                scanExceptionHandler.validateScanPrerequisites()
-                
-                bluetoothLeScanner = bleAdapterProvider.getBluetoothLeScanner()
-                
-                if (bluetoothLeScanner == null) {
-                    val adapter = bleAdapterProvider.getBleAdapterOrNull()
-                    throw ScanStartException(
-                        errorCode = -1,
-                        message = "BluetoothLeScanner is null. Adapter: $adapter, isEnabled: ${adapter?.isEnabled}"
-                    )
-                }
-                
-                if (!permissionChecker.hasBluetoothPermissions()) {
-                    val missingPermissions = permissionChecker.getMissingPermissions()
-                    throw ScanStartException(
-                        errorCode = -2,
-                        message = "Missing permissions: ${missingPermissions.joinToString()}"
-                    )
-                }
-                
-                _scanState.value = BleScanState.Starting
-                discoveredDevices.clear()
-                _scanResults.value = emptyList()
-                
-                val settings = scanSettings ?: ScanSettings.Builder()
-                    .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-                    .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
-                    .build()
-                
-                bluetoothLeScanner?.let { scanner ->
-                    try {
-                        bleAdapterProvider.startScan(scanner, scanFilters, settings, scanCallback)
-                    } catch (e: SecurityException) {
-                        throw ScanStartException(
-                            errorCode = -3,
-                            message = "Permission denied: ${e.message}"
-                        )
+                // Use suspendCancellableCoroutine for proper cancellation support
+                suspendCancellableCoroutine<Unit> { continuation ->
+                    val timeoutJob = launch {
+                        delay(scanTimeoutMs)
+                        if (_scanState.value is BleScanState.Scanning) {
+                            stopScan()
+                            _scanState.value = BleScanState.TimedOut(scanTimeoutMs)
+                        }
+                        if (continuation.isActive) {
+                            continuation.resumeWith(Result.success(Unit))
+                        }
+                    }
+                    
+                    continuation.invokeOnCancellation { 
+                        timeoutJob.cancel()
+                        stopScan()
                     }
                 }
-                _scanState.value = BleScanState.Scanning(System.currentTimeMillis())
-                
-                delay(scanTimeoutMs)
-                
-                if (_scanState.value is BleScanState.Scanning) {
-                    stopScan()
-                    _scanState.value = BleScanState.TimedOut(scanTimeoutMs)
-                }
-                
-            } catch (e: BleScanException) {
-                _scanState.value = BleScanState.Failed(
-                    exception = e,
-                    canRetry = true
-                )
-            } catch (e: BleException) {
-                _scanState.value = BleScanState.Failed(
-                    exception = ScanStartException(-1, e.message ?: "BLE error"),
-                    canRetry = true
-                )
-            } catch (e: Exception) {
-                val scanException = ScanStartException(
-                    errorCode = -1,
-                    message = "Exception: ${e.javaClass.simpleName}: ${e.message}"
-                )
-                _scanState.value = BleScanState.Failed(
-                    exception = scanException,
-                    canRetry = true
-                )
+            } catch (e: CancellationException) {
+                stopScan()
+                throw e // Always rethrow CancellationException
             }
         }
     }

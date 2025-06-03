@@ -34,27 +34,37 @@ class BleViewModel @Inject constructor(
         }
         
         viewModelScope.launch {
-            bleRepository.startScan().fold(
-                onSuccess = {
-                    _uiState.value = _uiState.value.copy(error = null)
-                },
-                onFailure = { error ->
-                    _uiState.value = _uiState.value.copy(error = error.message)
-                }
-            )
+            try {
+                bleRepository.startScan().fold(
+                    onSuccess = {
+                        _uiState.value = _uiState.value.copy(error = null)
+                    },
+                    onFailure = { error ->
+                        _uiState.value = _uiState.value.copy(error = error.message)
+                    }
+                )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Don't update UI state on cancellation - let it be handled by structured concurrency
+                throw e
+            }
         }
     }
     
     fun stopScan() {
         viewModelScope.launch {
-            bleRepository.stopScan().fold(
-                onSuccess = {
-                    _uiState.value = _uiState.value.copy(error = null)
-                },
-                onFailure = { error ->
-                    _uiState.value = _uiState.value.copy(error = error.message)
-                }
-            )
+            try {
+                bleRepository.stopScan().fold(
+                    onSuccess = {
+                        _uiState.value = _uiState.value.copy(error = null)
+                    },
+                    onFailure = { error ->
+                        _uiState.value = _uiState.value.copy(error = error.message)
+                    }
+                )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Don't update UI state on cancellation - let it be handled by structured concurrency
+                throw e
+            }
         }
     }
     
@@ -76,28 +86,38 @@ class BleViewModel @Inject constructor(
         }
         
         viewModelScope.launch {
-            val device = scanResult.toBleDevice()
-            bleRepository.connect(device).fold(
-                onSuccess = {
-                    _uiState.value = _uiState.value.copy(error = null)
-                },
-                onFailure = { error ->
-                    _uiState.value = _uiState.value.copy(error = error.message)
-                }
-            )
+            try {
+                val device = scanResult.toBleDevice()
+                bleRepository.connect(device).fold(
+                    onSuccess = {
+                        _uiState.value = _uiState.value.copy(error = null)
+                    },
+                    onFailure = { error ->
+                        _uiState.value = _uiState.value.copy(error = error.message)
+                    }
+                )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Don't update UI state on cancellation - let it be handled by structured concurrency
+                throw e
+            }
         }
     }
     
     fun disconnect() {
         viewModelScope.launch {
-            bleRepository.disconnect().fold(
-                onSuccess = {
-                    _uiState.value = _uiState.value.copy(error = null)
-                },
-                onFailure = { error ->
-                    _uiState.value = _uiState.value.copy(error = error.message)
-                }
-            )
+            try {
+                bleRepository.disconnect().fold(
+                    onSuccess = {
+                        _uiState.value = _uiState.value.copy(error = null)
+                    },
+                    onFailure = { error ->
+                        _uiState.value = _uiState.value.copy(error = error.message)
+                    }
+                )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Don't update UI state on cancellation - let it be handled by structured concurrency
+                throw e
+            }
         }
     }
     

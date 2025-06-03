@@ -8,6 +8,7 @@ import com.ssk.bleflux.domain.scan.BleScanResult
 import com.ssk.bleflux.domain.scan.BleScanState
 import com.ssk.bleflux.domain.scan.BleScanner
 import com.ssk.bleflux.domain.scan.BlePermissionChecker
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 
 class BleRepositoryImpl(
@@ -24,6 +25,9 @@ class BleRepositoryImpl(
         return try {
             bleScanner.startScan(timeoutMs)
             Result.success(Unit)
+        } catch (e: CancellationException) {
+            // Never catch and wrap CancellationException
+            throw e
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -46,11 +50,21 @@ class BleRepositoryImpl(
     override val connectionState: Flow<BleConnectionState> = bleConnection.connectionState
     
     override suspend fun connect(device: BleDevice, autoConnect: Boolean, timeoutMs: Long): Result<Unit> {
-        return bleConnection.connect(device, autoConnect, timeoutMs)
+        return try {
+            bleConnection.connect(device, autoConnect, timeoutMs)
+        } catch (e: CancellationException) {
+            // Never catch and wrap CancellationException
+            throw e
+        }
     }
     
     override suspend fun disconnect(): Result<Unit> {
-        return bleConnection.disconnect()
+        return try {
+            bleConnection.disconnect()
+        } catch (e: CancellationException) {
+            // Never catch and wrap CancellationException
+            throw e
+        }
     }
     
     override fun isConnected(): Boolean {
